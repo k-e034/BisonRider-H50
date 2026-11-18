@@ -18,6 +18,7 @@
 移植したのはベンダが全回で使うモード（+0x7c = 0x804141・+0x80 = 0）だけ。
 このフラグ語で 0x29a6c の分岐が決まる欄（+0x5c/+0x60/+0x64 など）は、その分岐の結果を定数で持つ。
 """
+import os
 import struct
 
 # --- 0x31 要求のオフセット（ref/iohook-2 の 6 本で意味を確定） ---
@@ -54,6 +55,13 @@ AUDIO_TYPES = (0x03, 0x04, 0x0F, 0x11)        # MPEG-1/2 音声・AAC（ADTS/LAT
 # 2 本目の副5 が 0xf で断られる（2026-11-17 の試験）。カードはデータ放送の ES をもともと出さない（0x138・0x140〜 は
 # 出力に無い）ので、渡しても使われない
 ES_KEEP_TYPES = VIDEO_TYPES + AUDIO_TYPES + (0x06,)
+# データ放送のカルーセル（DSM-CC）。本放送のものは暗号化されている（ch22 の生の TS で 0x0840 など全パケット）。
+# 試し: 環境変数 DTH50_ES_DATA=1 で 0x0d もカードに渡す（ベンダは渡している。今の手順で dec の環に出るかを確かめる）
+DATA_TYPES = (0x0D,)
+
+
+def es_keep_types():
+    return ES_KEEP_TYPES + (DATA_TYPES if os.environ.get("DTH50_ES_DATA") else ())
 
 
 def req31(pn, pmt_pid, pcr_pid, es):
@@ -137,7 +145,8 @@ def parse_pmt(sec):
 
 def req31_from_pmt(sec, pmt_pid):
     pn, pcr, es = parse_pmt(sec)
-    return req31(pn, pmt_pid, pcr, [e for e in es if e[2] in ES_KEEP_TYPES])
+    keep = es_keep_types()
+    return req31(pn, pmt_pid, pcr, [e for e in es if e[2] in keep][:ES_MAX])
 
 
 # --- 0x29a6c の移植（0x31 要求 → 副5 引数の中身） ---

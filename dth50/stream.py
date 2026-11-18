@@ -884,6 +884,9 @@ class Stream:
 
         wt = threading.Thread(target=writer, name="pump-writer", daemon=True)
         wt.start()
+        # 試し（診断）: 環境変数 DTH50_RING_DUMP=接頭辞 で、環ごとの中身も 接頭辞-exit.ts / 接頭辞-dec.ts に書く
+        prefix = os.environ.get("DTH50_RING_DUMP")
+        dumps = {r["name"]: open(f"{prefix}-{r['name']}.ts", "wb") for r in rings} if prefix else {}
         t0 = time.time()
         written = 0
         last_lap, max_gap, late = None, 0.0, 0
@@ -931,6 +934,8 @@ class Stream:
                             st["pending"] += whole
                             st["max_pending"] = max(st["max_pending"], st["pending"])
                         q.put(buf[:whole])
+                        if dumps:
+                            dumps[r["name"]].write(buf[:whole])
                     written += whole
                 if moved:
                     last_move = now
@@ -944,6 +949,8 @@ class Stream:
         finally:
             q.put(None)
             wt.join(timeout=5.0)
+            for f in dumps.values():
+                f.close()
         if st["dead"]:
             log.info("読み手が閉じた → 汲み出しを止めた")
         self.stalled = stalled

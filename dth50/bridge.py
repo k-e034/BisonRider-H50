@@ -13,8 +13,11 @@ Mirakurun は公式の推奨どおり Docker で動かす。コンテナの中�
 
 同時受信（既定）: 橋がカードを 1 回だけ開いて握り続け、2 つのチューナーの流れを同じプロセスの中で扱う。
   ・流れが無いときに開く 1 本目は席 0 で、SECODE とカード全体の手順（0x1b・PID 表・0x19）を出す。
-  ・もう 1 本が流れている最中に開く回は空いている席で、SECODE を出さず、流れている方の副5 の文脈から SECODE の欄を写す
+  ・もう 1 本が流れている最中に開く回は空いている席で、SECODE を出さず、自分の副1 につないで開くだけ
     （stream.seat_options）。閉じるときは自分の文脈だけを閉じ、最後の 1 本だけが 0x1a を出す。
+  ・2 本同時の復号が崩れた状態（STUCK_COUNTER）を見張り、崩れたカードでは 2 本目を開かない（1 本なら正しく復号できる）。
+    その要求は、空いている別のカードのチューナーで流す（Mirakurun は断られても別のチューナーへ移らず、同じチューナーを
+    やり直し続けるため）。
   ・席のバッファ（IOMMU の割り当て）は橋が持ち続けて使い回す（外すと他方の流れとカードが止まる・Stream の hb）。
   ・カードへの命令（開く・閉じる）は 1 回ずつ通す。同じチューナーへの次の要求は、前の回が閉じ終わるまで最大 --wait-busy 秒待たせる。
   ・閉じる命令が返らなかった・カードを開けなかったときは、流れが無くなってから橋を終える（systemd が起動し直す）。
@@ -22,6 +25,7 @@ Mirakurun は公式の推奨どおり Docker で動かす。コンテナの中�
 
 実験用リポジトリ（非公開）の tools/dth50-bridge.py から移した。
 """
+import collections
 import logging
 import os
 import select
@@ -36,6 +40,13 @@ log = logging.getLogger("dth50.bridge")
 # 診断の dump で読む範囲（読むだけ）: ファームの大域（鍵の枠の表 A/B・PID の表 0x8020a440・区画の表・gp の周り）と、
 # 流れの文脈 5 つ（0xa02af010〜0xa02d72f0・各 0xa0b8）
 DUMP_REGIONS = (("global", 0x80200000, 0x80250000), ("ctx", 0x802AF000, 0x802E2000))
+# 2 本同時の復号が崩れた状態の目印（2026-11-18）。正常なカードでは、流れていない・1 本・2 本のどの場面でも 0
+# （PCIEW・PCIE とも）。崩れた PCIEW では 1 秒に約 110 ずつ増え続け、閉じても止まらない。崩れると 2 本同時は
+# どの局どうしでも 2 本とも壊れ、1 本だけなら正しい。電源を入れ直すまで戻らない。何の数かは未解明
+STUCK_COUNTER = 0x8021F4E8
+# 崩れたときにログに添える語（正常でも変わるので目印には使わない）: B-CAS カードとの通信の表の頭と +0x110・0x80227e60
+STUCK_NOTE = (0x802309F8, 0x80230B08, 0x80227E60)
+STUCK_POLL = 1.0                 # 見張りの間隔（秒）
 SEAT_GAP = 1.5                   # 同じ席を閉じてから次に開くまでの最小の間（秒）
 SUB5_RETRIES = 1                 # 副5 が文脈を返さなかったときのやり直しの回数
 BUSY = threading.Lock()          # --spawn: 1 本ずつ通す
@@ -185,6 +196,10 @@ class CardUnit:
         # warm で閉じられず同じことを繰り返す（2026-11-11 は 189 回）。このカードへの要求はすぐ断り続ける
         self.dead = None
         self.dead_logged = 0.0
+        # 2 本同時の復号が崩れた（STUCK_COUNTER が 0 でない）。1 本は開くが、2 本目は断る（電源を入れ直すまで）
+        self.stuck = None
+        self.stuck_logged = 0.0
+        self.events = collections.deque(maxlen=16)  # 最近の開く・閉じる（崩れたときにログへ出す）
 
     @property
     def name(self):
@@ -203,6 +218,35 @@ class CardUnit:
         except SystemExit as e:                      # bind_vfio などは SystemExit で知らせる
             raise RuntimeError(str(e)) from None
         log.info("カードを開いた（%s・%s・区画 %s）", self.bdf, "warm" if warm else "cold", self.pool())
+
+    def note(self, text):
+        self.events.append((time.time(), text))
+
+    def check_stuck(self):
+        """STUCK_COUNTER を読む（読むだけ）。0 でなくなったら self.stuck を立て、その時の様子をログに出す。"""
+        if self.card is None or self.dead or self.stuck:
+            return self.stuck
+        try:
+            v = self.card.read32(STUCK_COUNTER)
+        except Exception as e:                       # noqa: BLE001
+            log.debug("%s の見張りで読めない: %s", self.name, e)
+            return None
+        if v == 0:
+            return None
+        try:
+            extra = " ".join(f"0x{x:08x}={self.card.read32(x):08x}" for x in STUCK_NOTE)
+        except Exception:                            # noqa: BLE001
+            extra = ""
+        self.stuck = time.time()
+        seats = ", ".join(f"席 {s.seat} ch{getattr(s, 'ch', '?')}{'（1 本目）' if s.o.primary else ''}"
+                          for s in self.seats if s is not None) or "なし"
+        log.error("%s で 2 本同時の復号が崩れた（0x%08x = 0x%x・%s）。流れている回: %s。"
+                  "このカードでは以後 2 本目を開かない（1 本なら復号できる）。戻すにはマシンの電源を入れ直す",
+                  self.name, STUCK_COUNTER, v, extra, seats)
+        for t, text in self.events:
+            log.error("  直前の操作 %s %s", time.strftime("%H:%M:%S", time.localtime(t)) + f".{int(t * 1000) % 1000:03d}",
+                      text)
+        return self.stuck
 
     def refuse(self, sid):
         if self.dead:
@@ -245,6 +289,13 @@ class CardUnit:
                 seat = free[0]
                 other = next((s for s in self.seats if s is not None), None)
                 src = 0
+                if other is not None and self.check_stuck():
+                    if time.time() - self.stuck_logged >= 60:
+                        log.warning("[%d] %s は 2 本同時の復号が崩れている → 2 本目（ch%d）は開かない", sid, self.name, ch)
+                        self.stuck_logged = time.time()
+                    else:
+                        log.debug("[%d] %s は 2 本同時の復号が崩れている → 断る", sid, self.name)
+                    return None
                 if other is not None:
                     src = other.prep_ctx or 0
                     if not C.is_ctx(src):
@@ -274,11 +325,14 @@ class CardUnit:
                     st.steady()
                 except Exception as e:               # noqa: BLE001
                     log.error("[%d] 開けない: %s: %s（%s・区画 %s）", sid, type(e).__name__, e, self.bdf, self.pool())
+                    self.note(f"[{sid}] ch{ch} 席 {seat} 開けない（{type(e).__name__}）")
                     self.close(sid, st)
                     if self.dead or not st.sub5_failed or attempt >= SUB5_RETRIES:
                         return None
                     continue
                 log.info("[%d] 開いた（%s・区画 %s）", sid, self.bdf, self.pool())
+                self.note(f"[{sid}] ch{ch} チューナー {local} 席 {seat} を開いた（{'1 本目' if not src else '2 本目'}）")
+                self.check_stuck()
                 return st
             return None
 
@@ -311,6 +365,8 @@ class CardUnit:
                 ok = False
             self.seats[st.seat] = None
             self.closed_at[st.seat] = time.time()
+            self.note(f"[{sid}] ch{getattr(st, 'ch', '?')} 席 {st.seat} を閉じた{'' if ok else '（返らない）'}")
+            self.check_stuck()
             log.info("[%d] 閉じた（%s・区画 %s）", sid, self.bdf, self.pool())
             if not ok:
                 log.error("[%d] 閉じる命令が返らなかった。%s が応答しない。以後このカードへの要求は断る（マシンの再起動まで）",
@@ -356,10 +412,47 @@ class Owner:
             log.info("チューナー %d = %s のチューナー %d", g, u.name, local)
         if not self.tuner_map:
             log.error("使えるカードが無い")
+        threading.Thread(target=self.watch_stuck, name="watch-stuck", daemon=True).start()
+
+    def watch_stuck(self):
+        """開いているカードの STUCK_COUNTER を STUCK_POLL 秒ごとに読む（崩れた時刻をログに残すため）。"""
+        while not STOPPING.is_set():
+            for u in self.units:
+                u.check_stuck()
+            STOPPING.wait(STUCK_POLL)
 
     def open(self, sid, ch, gtuner):
         u, local = self.tuner_map[gtuner]
+        if u.stuck and not u.idle():
+            # 崩れたカードの 2 本目になる。空いている別のカードのチューナーを借りて流す
+            st = self.borrow(sid, ch, gtuner, u)
+            if st is not None:
+                return st
         return u.open(sid, ch, local, gtuner)
+
+    def borrow(self, sid, ch, gtuner, bad):
+        """bad 以外のカードで、今すぐ使えるチューナー（錠が取れて、そのカードで開ける）を借りて開く。"""
+        for g, (v, local) in self.tuner_map.items():
+            if v is bad or v.dead or v.fatal or (v.stuck and not v.idle()):
+                continue
+            if all(s is not None for s in v.seats):
+                continue
+            lk = self.tuners[g]
+            if not lk.acquire(blocking=False):
+                continue
+            log.warning("[%d] %s は 2 本同時の復号が崩れている → ch%d はチューナー %d の代わりにチューナー %d（%s）で流す",
+                        sid, bad.name, ch, gtuner, g, v.name)
+            st = None
+            try:
+                st = v.open(sid, ch, local, g)
+            finally:
+                if st is None:
+                    lk.release()
+            if st is not None:
+                st.borrowed = lk                     # 閉じたら返す（session）
+                return st
+        log.warning("[%d] %s は 2 本同時の復号が崩れていて、代わりに使えるチューナーも無い → ch%d は開かない", sid, bad.name, ch)
+        return None
 
     def close(self, sid, st):
         st.unit.close(sid, st)
@@ -383,7 +476,7 @@ class Owner:
         for u in self.units:
             if u.card is None:
                 continue
-            meta = {"bdf": u.bdf, "model": u.m.name, "time": time.time(), "dead": u.dead,
+            meta = {"bdf": u.bdf, "model": u.m.name, "time": time.time(), "dead": u.dead, "stuck": u.stuck,
                     "seats": [None if s is None else {"seat": s.seat, "ch": getattr(s, "ch", None),
                                                       "primary": s.o.primary, "prep_ctx": s.prep_ctx}
                               for s in u.seats]}
@@ -434,6 +527,7 @@ def session(conn, sid, own):
         log.info("[%d] %.0f 秒待ってもチューナー %d の前の回が終わらない → 閉じる", sid, own.a.wait_busy, tuner)
         conn.close()
         return
+    st = None
     try:
         st = own.open(sid, ch, tuner)
         if st is None:
@@ -469,6 +563,9 @@ def session(conn, sid, own):
             conn.close()
         finally:
             tl.release()
+            lk = getattr(st, "borrowed", None)
+            if lk is not None:
+                lk.release()
 
 
 def main(a, pick=None, lock=None):

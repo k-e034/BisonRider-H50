@@ -39,7 +39,8 @@ import time
 log = logging.getLogger("dth50.bridge")
 # 診断の dump で読む範囲（読むだけ）: ファームの大域（鍵の枠の表 A/B・PID の表 0x8020a440・区画の表・gp の周り）と、
 # 流れの文脈 5 つ（0xa02af010〜0xa02d72f0・各 0xa0b8）
-DUMP_REGIONS = (("global", 0x80200000, 0x80250000), ("ctx", 0x802AF000, 0x802E2000))
+DUMP_REGIONS = (("global", 0x80200000, 0x80250000), ("ctx", 0x802AF000, 0x802E2000),
+                ("dmajobs", 0x80020000, 0x80095000))   # DMA の仕事の枠（[gp-0x6c68] の表が指す区域）
 # 2 本同時の復号が崩れた状態の目印（2026-11-18）。正常なカードでは、流れていない・1 本・2 本のどの場面でも 0
 # （PCIEW・PCIE とも）。崩れた PCIEW では 1 秒に約 110 ずつ増え続け、閉じても止まらない。崩れると 2 本同時は
 # どの局どうしでも 2 本とも壊れ、1 本だけなら正しい。電源を入れ直すまで戻らない。何の数かは未解明
@@ -47,6 +48,13 @@ STUCK_COUNTER = 0x8021F4E8
 # 崩れたときにログに添える語（正常でも変わるので目印には使わない）: B-CAS カードとの通信の表の頭と +0x110・0x80227e60
 STUCK_NOTE = (0x802309F8, 0x80230B08, 0x80227E60)
 STUCK_POLL = 1.0                 # 見張りの間隔（秒）
+# 崩れたと見なす増え方。正常なカードでも ch22 を含む 2 本同時で 1 回だけ増えることがあり、そのときは崩れていない
+# （2026-11-18 14:05・2 本とも 100% のまま・その後も 1 のまま）。本当に崩れると流れている間 1 秒に約 110 ずつ増え続ける
+STUCK_RISE = 30                  # 1 回の見張りの間（STUCK_POLL 秒）にこれだけ増えたら
+STUCK_TOTAL = 200                # または、合わせてこれ以上（崩れたまま橋を起動し直したとき）
+# 同じカードで 2 本目を開くのを、もう 1 本が開き終わってから何秒待つか（--second-gap）。2026-11-18 に「直後に開くと崩れる」
+# と見て 5 秒にしたが、5 秒待っても崩れた（ch22 を含む組）ので既定は 0 に戻した。崩れた回の共通点は ch22（open31.ES_KEEP_TYPES）
+SECOND_OPEN_AFTER = 0.0
 SEAT_GAP = 1.5                   # 同じ席を閉じてから次に開くまでの最小の間（秒）
 SUB5_RETRIES = 1                 # 副5 が文脈を返さなかったときのやり直しの回数
 BUSY = threading.Lock()          # --spawn: 1 本ずつ通す
@@ -199,7 +207,9 @@ class CardUnit:
         # 2 本同時の復号が崩れた（STUCK_COUNTER が 0 でない）。1 本は開くが、2 本目は断る（電源を入れ直すまで）
         self.stuck = None
         self.stuck_logged = 0.0
+        self.stuck_seen = None                       # 前に読んだ STUCK_COUNTER
         self.events = collections.deque(maxlen=16)  # 最近の開く・閉じる（崩れたときにログへ出す）
+        self.last_dma = None                         # DMA の仕事の枠の空き（変わったらログに出す・診断）
 
     @property
     def name(self):
@@ -223,7 +233,7 @@ class CardUnit:
         self.events.append((time.time(), text))
 
     def check_stuck(self):
-        """STUCK_COUNTER を読む（読むだけ）。0 でなくなったら self.stuck を立て、その時の様子をログに出す。"""
+        """STUCK_COUNTER を読む（読むだけ）。増え続けたら（STUCK_RISE / STUCK_TOTAL）self.stuck を立て、様子をログに出す。"""
         if self.card is None or self.dead or self.stuck:
             return self.stuck
         try:
@@ -231,7 +241,10 @@ class CardUnit:
         except Exception as e:                       # noqa: BLE001
             log.debug("%s の見張りで読めない: %s", self.name, e)
             return None
-        if v == 0:
+        prev, self.stuck_seen = self.stuck_seen, v
+        if v == 0 or (v < STUCK_TOTAL and (prev is None or v - prev < STUCK_RISE)):
+            if prev is not None and v != prev:
+                log.info("%s: 0x%08x が %d → %d（崩れたとは見なさない）", self.name, STUCK_COUNTER, prev, v)
             return None
         try:
             extra = " ".join(f"0x{x:08x}={self.card.read32(x):08x}" for x in STUCK_NOTE)
@@ -240,13 +253,27 @@ class CardUnit:
         self.stuck = time.time()
         seats = ", ".join(f"席 {s.seat} ch{getattr(s, 'ch', '?')}{'（1 本目）' if s.o.primary else ''}"
                           for s in self.seats if s is not None) or "なし"
-        log.error("%s で 2 本同時の復号が崩れた（0x%08x = 0x%x・%s）。流れている回: %s。"
+        log.error("%s で 2 本同時の復号が崩れた（0x%08x = 0x%x・%s・区画 %s）。流れている回: %s。"
                   "このカードでは以後 2 本目を開かない（1 本なら復号できる）。戻すにはマシンの電源を入れ直す",
-                  self.name, STUCK_COUNTER, v, extra, seats)
+                  self.name, STUCK_COUNTER, v, extra, self.pool(), seats)
         for t, text in self.events:
             log.error("  直前の操作 %s %s", time.strftime("%H:%M:%S", time.localtime(t)) + f".{int(t * 1000) % 1000:03d}",
                       text)
         return self.stuck
+
+    def watch_dma(self):
+        """DMA の仕事の枠の空きが変わったらログに出す（崩れる前に枠が減っていくかを見るため・読むだけ）。"""
+        if self.card is None or self.dead:
+            return
+        try:
+            dj = self.card.dma_jobs()
+        except Exception:                            # noqa: BLE001
+            return
+        if dj is not None and dj != self.last_dma:
+            seats = ", ".join(f"席 {s.seat} ch{getattr(s, 'ch', '?')}" for s in self.seats if s is not None) or "なし"
+            log.info("%s: DMA 枠 空き %d/%d（前は %s・流れている回: %s）", self.name, dj[0], dj[1],
+                     "--" if self.last_dma is None else self.last_dma[0], seats)
+            self.last_dma = dj
 
     def refuse(self, sid):
         if self.dead:
@@ -289,6 +316,13 @@ class CardUnit:
                 seat = free[0]
                 other = next((s for s in self.seats if s is not None), None)
                 src = 0
+                if other is not None:
+                    want = getattr(self.owner.a, "second_gap", None)
+                    want = SECOND_OPEN_AFTER if want is None else want
+                    gap = want - (time.time() - getattr(other, "opened_at", 0.0))
+                    if gap > 0:
+                        log.info("[%d] %s でもう 1 本が開き終わった直後 → %.1f 秒待ってから 2 本目を開く", sid, self.name, gap)
+                        time.sleep(gap)
                 if other is not None and self.check_stuck():
                     if time.time() - self.stuck_logged >= 60:
                         log.warning("[%d] %s は 2 本同時の復号が崩れている → 2 本目（ch%d）は開かない", sid, self.name, ch)
@@ -330,6 +364,7 @@ class CardUnit:
                     if self.dead or not st.sub5_failed or attempt >= SUB5_RETRIES:
                         return None
                     continue
+                st.opened_at = time.time()
                 log.info("[%d] 開いた（%s・区画 %s）", sid, self.bdf, self.pool())
                 self.note(f"[{sid}] ch{ch} チューナー {local} 席 {seat} を開いた（{'1 本目' if not src else '2 本目'}）")
                 self.check_stuck()
@@ -353,7 +388,12 @@ class CardUnit:
             keys = f"・鍵 A {len(ka)}{ka} B {len(kb)}{kb}"
         except Exception:                            # noqa: BLE001
             keys = ""
-        return f"{'--' if u is None else f'{u[0]}/{u[1]}'}・表1 {f(t1)}・表2 {f(t2)}{keys}"
+        try:
+            dj = self.card.dma_jobs()
+            dma = "" if dj is None else f"・DMA 枠 空き {dj[0]}/{dj[1]}"
+        except Exception:                            # noqa: BLE001
+            dma = ""
+        return f"{'--' if u is None else f'{u[0]}/{u[1]}'}・表1 {f(t1)}・表2 {f(t2)}{keys}{dma}"
 
     def close(self, sid, st):
         with self.cmd:
@@ -416,9 +456,13 @@ class Owner:
 
     def watch_stuck(self):
         """開いているカードの STUCK_COUNTER を STUCK_POLL 秒ごとに読む（崩れた時刻をログに残すため）。"""
+        n = 0
         while not STOPPING.is_set():
             for u in self.units:
                 u.check_stuck()
+                if n % 5 == 0:
+                    u.watch_dma()
+            n += 1
             STOPPING.wait(STUCK_POLL)
 
     def open(self, sid, ch, gtuner):

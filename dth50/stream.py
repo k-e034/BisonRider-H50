@@ -21,6 +21,7 @@ Mirakurun 用の起動（tools/dth50-mirakurun.sh → run-ch27-vendor.sh の旗�
 ⚠️ 実験時代の旗（三つ組 3 回・+0x628 の強制・+0x4c の OR など）は、効いているか分からないものも含めてそのまま。
    実機で動くことを確かめてから 1 つずつ外して確かめる（docs/porting.md）。
 """
+import collections
 import ctypes
 import logging
 import mmap
@@ -158,6 +159,18 @@ def _find_sync(buf):
         if buf[k] == 0x47 and buf[k + 188] == 0x47 and buf[k + 376] == 0x47:
             return k
     return None
+
+
+def _drop_scrambled(data, pids=None):
+    """188 の区切りに揃った TS から、暗号の印（transport_scrambling_control）が 0 でないパケットを除く。
+    pids（Counter）を渡すと、除いたパケットの PID を数える。"""
+    if not any(data[k + 3] & 0xC0 for k in range(0, len(data), 188)):
+        return data
+    if pids is not None:
+        for k in range(0, len(data), 188):
+            if data[k + 3] & 0xC0:
+                pids[((data[k + 1] & 0x1F) << 8) | data[k + 2]] += 1
+    return b"".join(data[k:k + 188] for k in range(0, len(data), 188) if not data[k + 3] & 0xC0)
 
 
 def _fastread():
@@ -929,6 +942,13 @@ class Stream:
                         buf = buf[k:]
                     whole = len(buf) - len(buf) % 188
                     r["carry"] = buf[whole:]
+                    if whole and r["name"] == "exit":
+                        # exit の環は平文の PID の素通し。カードに渡さない ES（データ放送など）は暗号化されたまま
+                        # 通ってくるので捨てる（EPGStation の「スクランブル」の数が増えないように・2026-11-18）
+                        kept = _drop_scrambled(buf[:whole], r.setdefault("scr_pids", collections.Counter()))
+                        r["scrambled"] = r.get("scrambled", 0) + (whole - len(kept)) // 188
+                        buf, whole = kept + r["carry"], len(kept)
+                        r["carry"] = buf[whole:]
                     if whole:
                         with lock:
                             st["pending"] += whole
@@ -959,7 +979,9 @@ class Stream:
                  "溜まり 最大 %.1f MB", max_gap * 1000, o.pump_late * 1000, late, st["max_block"] * 1000,
                  st["max_pending"] / 1e6)
         for r in rings:
-            log.info("%s: %d 本（%.1f Mbps）%s%s", r["name"], r["total"] // 188, r["total"] * 8 / el / 1e6,
+            log.info("%s: %d 本（%.1f Mbps）%s%s%s", r["name"], r["total"] // 188, r["total"] * 8 / el / 1e6,
+                     (f"・暗号化されたままで捨てた {r['scrambled']} 本（"
+                      + " ".join(f"{p:04x}:{n}" for p, n in r["scr_pids"].most_common(6)) + "）") if r.get("scrambled") else "",
                      f"・取りこぼしの恐れ {r['laps']} 回" if r["laps"] else "",
                      f"・区切りを合わせ直した {r['resync']} 回（捨てた {r['dropped']} バイト）" if r["resync"] else "")
         return written

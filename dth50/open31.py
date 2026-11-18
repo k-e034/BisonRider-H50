@@ -50,18 +50,25 @@ REQ31_FIXED = {
 
 VIDEO_TYPES = (0x01, 0x02, 0x1B, 0x24)        # MPEG-1/2・H.264・H.265
 AUDIO_TYPES = (0x03, 0x04, 0x0F, 0x11)        # MPEG-1/2 音声・AAC（ADTS/LATM）
-# カードに渡す ES の種類: 映像・音声・0x06（字幕・文字スーパー）。データ放送のカルーセル（0x0d など）は渡さない。
-# 2 本の流れはファームの PID の表（0x8020a440・30 段・0x8019dcf0）を分け合い、ES の多い局どうし（14 本＋13 本）だと
-# 2 本目の副5 が 0xf で断られる（2026-11-17 の試験）。カードはデータ放送の ES をもともと出さない（0x138・0x140〜 は
-# 出力に無い）ので、渡しても使われない
-ES_KEEP_TYPES = VIDEO_TYPES + AUDIO_TYPES + (0x06,)
+# カードに渡す ES の種類: 映像・音声だけ。
+# ・カードが復号して出すのは副5 の 5 つの欄（映像・音声）の PID だけで、ES の表のほかの PID は復号しない。平文の PID
+#   （字幕・番組表・ワンセグなど）は ES の表に入れなくても exit の環をそのまま通る（ワンセグは表に入れたことが無い）。
+# ・2 本の流れはファームの PID の表（0x8020a440・30 段・0x8019dcf0）を分け合い、ES の多い局どうし（14 本＋13 本）だと
+#   2 本目の副5 が 0xf で断られる（2026-11-17 の試験）。データ放送のカルーセル（0x0d）は 11-17 から渡していない。
+# ・0x06（字幕・文字スーパー）も 2026-11-18 から渡さない。PCIEW の 2 本同時が崩れた 4 回はどれも ch22（TBS）を含む回で、
+#   ch22 の 0x0114（種類 0x06・文字スーパー）は CA 記述子が無く番組の ECM で暗号化されている（ときどき流れる）。
+#   似た作りの ch20 の 0x0115 は CA PID 0x1fff（暗号なし）、ch27 の字幕は平文。暗号化された 0x06 を表に入れて
+#   2 本目の流れで処理させるのが崩れる引き金という見立て（未確認）。試し: DTH50_ES_SUBS=1 で 0x06 を戻す
+ES_KEEP_TYPES = VIDEO_TYPES + AUDIO_TYPES
+SUB_TYPES = (0x06,)
 # データ放送のカルーセル（DSM-CC）。本放送のものは暗号化されている（ch22 の生の TS で 0x0840 など全パケット）。
 # 試し: 環境変数 DTH50_ES_DATA=1 で 0x0d もカードに渡す（ベンダは渡している。今の手順で dec の環に出るかを確かめる）
 DATA_TYPES = (0x0D,)
 
 
 def es_keep_types():
-    return ES_KEEP_TYPES + (DATA_TYPES if os.environ.get("DTH50_ES_DATA") else ())
+    return (ES_KEEP_TYPES + (SUB_TYPES if os.environ.get("DTH50_ES_SUBS") else ())
+            + (DATA_TYPES if os.environ.get("DTH50_ES_DATA") else ()))
 
 
 def req31(pn, pmt_pid, pcr_pid, es):

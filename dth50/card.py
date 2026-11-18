@@ -31,6 +31,7 @@ EVT_CMD = 0x02
 # ---- コマンドの枠（カード内メモリ）。枠 n = 0x1840 + n * 0xAFC、引数域 = 枠 + 0x24 ----
 KEY_TAB_A = 0x802023CC       # 鍵の枠の表 A（0x1f バイト・0 以外が使用中）。0x8012b3bc(n) が n 個連続の空きを探す
 KEY_TAB_B = 0x802023EC       # 表 B（同じ形・0x8012b4ac）。副5 の復号路は A・B から 2 個ずつ借りる（0x8012e034）
+DMA_JOB_POOL = 0x8021FAB8     # [gp-0x6c68]: DMA の仕事の枠の表（+0 空き枠の鎖の先頭・+4 枠の数 0x10）
 SUB5_ERR = 0x8021F1DC        # [gp-0x7544]: 副5 の処理（0x801860a8）が失敗の理由を置く（2 / 6 / 0xe / 0x10 / 0x11 / 0x12 …）
 POOL_TAB = 0x8021FB88        # [gp-0x6b98]: 区画の貸し出し表のアドレス（gp = 0x80226720）
 POOL_LAST = 0x8021FA80       # [gp-0x6ca0]: 表の最後の番号
@@ -287,6 +288,20 @@ class Card:
                         word[i - w] = 0
                 self.write(base + w, bytes(word))
         return freed[0], freed[1]
+
+    def dma_jobs(self, limit=64):
+        """ファームの DMA の仕事の枠（[gp-0x6c68] の表・0x801522b0 が貸し、空き枠は +0 で鎖になる）。戻り (空き, 全体) か None。
+        2 本同時の復号が崩れた PCIEW では、ホストへの出力（0x801a4b1c）がこの枠を借りられず失敗し続ける（2026-11-18）。読むだけ。"""
+        p = self.read32(DMA_JOB_POOL)
+        if not (p >> 28) in (0x8, 0xA):
+            return None
+        total = self.read32(p + 4)
+        x, free, seen = self.read32(p), 0, set()
+        while x and (x >> 28) in (0x8, 0xA) and x not in seen and free < limit:
+            seen.add(x)
+            free += 1
+            x = self.read32(x)
+        return free, total
 
     def key_slots(self):
         """鍵の枠の表 A・B で使用中の番号。戻り ([A の番号], [B の番号])。"""

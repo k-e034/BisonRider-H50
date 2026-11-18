@@ -207,6 +207,8 @@ def main(argv=None):
                    help="試し: もう 1 本が流れている最中に開く回も、欄を写さずに自分で 0x15・SECODE・三つ組を出す")
     p.add_argument("--secondary-copy", action="store_true",
                    help="試し（以前の動き）: もう 1 本が流れている最中に開く回で、SECODE の欄を写す（鍵の切り替わりで壊れる）")
+    p.add_argument("--second-gap", type=float, default=None, metavar="SECS",
+                   help="同じカードで 2 本目を開くのを、もう 1 本が開き終わってから何秒待つか（既定 0）")
     p.add_argument("--spawn", action="store_true",
                    help="以前の動き: 要求ごとに stream を起動し、1 本ずつ通す（同時受信なし）")
     p.add_argument("--grace", type=float, default=60.0, metavar="SECS",

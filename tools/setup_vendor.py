@@ -13,7 +13,7 @@
              （tools/extract_mj110.py を呼ぶ。pip install unicorn pefile が要る）
 
 ファーム・SECODE・フィルタは BUFFALO / CyberLink の著作物なので、このリポジトリにも束にも入れない。
-利用者が自分の持っているドライバ・アプリから取り出す。
+各自が手元のドライバ・アプリから取り出す。
 """
 import argparse
 import hashlib

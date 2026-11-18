@@ -1,7 +1,7 @@
 """ベンダ由来のデータ（このリポジトリには入れない）の置き場所と読み込み。
 
 置き場所は、--vendor DIR・環境変数 DTH50_VENDOR・/usr/local/share/dth50 の順に探す。
-tools/setup_vendor.py が、利用者の持っているドライバ・アプリと、別に配っている「採った列」の束から揃える（README）。中身:
+tools/setup_vendor.py が、手元にあるベンダのドライバ・アプリと、別に配っている「採った列」の束から揃える（README）。中身:
 
   firmware.bin        カードのファーム（BUFFALO の PCIEW 用ドライバ 1.63 の BufFullSeg.sys から取り出したもの）
   init-recipe.txt     初期化列（冷えたカードの起動を採ったもの）

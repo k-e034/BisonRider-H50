@@ -17,12 +17,12 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from setup_vendor import RECIPES  # noqa: E402
 
-README = """dth50-recipes: BisonRider-H50（DT-H50/PCIEW・DT-H50/PCIE の Linux ドライバ・Python のパッケージ名は dth50）が使う「採った列」。
+README = """dth50-recipes: BisonRider-H50（DT-H50/PCIEW・DT-H50/PCIE の Linux ドライバ。Python のパッケージ名は dth50）が使う記録データです。
 
-ベンダのドライバがカードを起動・選局するときの読み書きと命令の引数を、実機で採って並べたもの。
-ファーム・SECODE は入っていない（利用者が自分のドライバ・アプリから取り出す）。使い方は BisonRider-H50 の README。
+ベンダのドライバがカードを起動・選局するときの読み書きと命令の引数を、実機で記録したものです。
+ファームウェアと SECODE は入っていません（手元のドライバとアプリから取り出してください）。使い方は BisonRider-H50 の README を見てください。
 
-  python3 tools/setup_vendor.py --driver BufFullSeg.sys --secode Vixs_RR1_CL.scd --recipes この束
+  python3 tools/setup_vendor.py --driver BufFullSeg.sys --secode Vixs_RR1_CL.scd --recipes このファイル
 """
 
 

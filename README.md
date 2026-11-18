@@ -52,19 +52,21 @@ Linux では展開するだけ。入れたり動かしたりはしない）。
 ⚠️ 製品の CD-ROM のドライバは版が違い、ファームの中身も違う（このドライバでは確かめていない）。確かめたのは上の版だけ。
 
 ```bash
-sudo apt install p7zip-full unshield        # 展開の道具（unshield は InstallShield の cab を開く）
+sudo apt install 7zip unshield python3-unicorn python3-pefile
+    # 展開の道具（unshield は InstallShield の cab を開く）と、--filter で使う unicorn・pefile。
+    # 7zip が無い古い版（Ubuntu 22.04 など）は p7zip-full
 7z x dth50pciewdrv_163.exe -odrv            # → drv/DTH50PCIEWDRV_163/Drivers/BufFullSeg.sys・BufFsLiveFilter.ax
 7z x pcastforchideji_115.exe -opcast        # → pcast/PCastTVfor地デジ_115/TVE/TVE_7125.exe
 7z x pcast/*/TVE/TVE_7125.exe -otve         # フォルダ名は日本語（展開した環境によって化ける）なので * で指す
 unshield -d tve/out x tve/data1.cab         # → tve/out/Capture_File_Group/Vixs_RR1_CL.scd
 
-pip install unicorn pefile                  # --filter を使うときだけ
 sudo python3 tools/setup_vendor.py --driver drv/DTH50PCIEWDRV_163/Drivers/BufFullSeg.sys \
     --secode tve/out/Capture_File_Group/Vixs_RR1_CL.scd \
     --recipes dth50-recipes-1.tar.gz --filter drv/DTH50PCIEWDRV_163/Drivers/BufFsLiveFilter.ax
 ```
 
-`--filter` は `tools/extract_mj110.py` を `sudo` の `python3` で動かすので、unicorn・pefile はその python3 から見える所に入れる。
+`--filter` は `tools/extract_mj110.py` を `sudo` の `python3` で動かすので、unicorn・pefile は apt で（システムの python3 に）入れる。
+pip で入れるなら、`sudo` の `python3` から見える所に。
 
 `/usr/local/share/dth50` に `firmware.bin`・`secode.scd`・採った列 4 つ・`tuner2-mj110.txt` が置かれる。
 どれも動作を確かめたものと SHA-256 で照らし合わせ、版が違えば止める。

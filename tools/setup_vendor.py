@@ -29,7 +29,7 @@ FW_OFFSET, FW_SIZE = 0x34A58, 1178032                  # BufFullSeg.sys（1.63�
 FW_SHA256 = "07fe92d4dfe440e48e451eac6fb405b4dee21948851d497519592b68590bb9b4"
 DRIVER_SHA256 = "1dbf2ad1b7819d4e3f58e3ea6b7463664bd6b2d32a67561bd0b2c9bab5d5573d"
 SECODE_SHA256 = "534f9591aaa7d009c67ed16c041fbebd4d4744077a7e0c0a993641c5afda6127"
-MJ110_SHA256 = "fd6dd9935cad30224d80fb27a0ca66c5dc49e1f5a31dcd981d719ba70c48899f"
+MJ110_SHA256 = "cf7a65bf99db319990361bb49fdb6812ec0a3ebf7a4778c11cde39ed08dfa1f2"   # 改行は LF にそろえて比べる
 # 束 1 の中身（tools/pack_recipes.py が作る）
 RECIPES = {
     "init-recipe.txt": "af72528f67f58922b5a8a2446296da39b264c5d93188e558b9267fa210f2b82e",
@@ -87,7 +87,7 @@ def main():
         r = subprocess.run([sys.executable, os.path.join(HERE, "extract_mj110.py"), a.filter], capture_output=True)
         if r.returncode != 0:
             sys.exit(f"tools/extract_mj110.py が失敗した:\n{r.stderr.decode(errors='replace')}")
-        mj110 = r.stdout
+        mj110 = r.stdout.replace(b"\r\n", b"\n")     # Windows で動かすと CRLF になる
         if sha(mj110) != MJ110_SHA256:
             print(f"⚠️ 作った tuner2-mj110.txt が確かめたものと違う（sha256 {sha(mj110)[:16]}…）", file=sys.stderr)
 

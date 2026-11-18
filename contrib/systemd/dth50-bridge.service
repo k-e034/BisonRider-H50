@@ -1,0 +1,26 @@
+# Docker の Mirakurun とカードをつなぐ橋。contrib/install.sh が @REPO@ と @VENDOR@ を置き換えて
+# /etc/systemd/system/ に置く。
+[Unit]
+Description=DT-H50 bridge for Mirakurun in Docker (python3 -m dth50 bridge)
+After=network.target
+
+[Service]
+# カード（VFIO）を握るので root で動かす
+Environment=PYTHONPATH=@REPO@
+WorkingDirectory=@REPO@
+ExecStart=/usr/bin/python3 -u -m dth50 bridge --sock /run/dth50/tuner.sock --vendor @VENDOR@
+# /run/dth50 は Mirakurun のコンテナに /dth50/run として渡している。橋を再起動してもディレクトリを消さない
+# （消すとコンテナ側のマウントが古いディレクトリを指したままになる）
+RuntimeDirectory=dth50
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# 橋を止めるときは、流している回の閉じる手順（stream の SIGTERM 処理）が終わるまで待つ
+KillMode=mixed
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

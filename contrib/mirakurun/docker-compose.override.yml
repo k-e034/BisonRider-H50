@@ -1,0 +1,10 @@
+# 公式の docker-compose.yml（Chinachu/Mirakurun の docker/docker-compose.yml）と同じディレクトリに置くと、
+# docker compose が自動で重ねる。公式のファイルは書き換えない。contrib/install.sh が置く。
+#   /run/dth50                              … ホストの橋（dth50-bridge.service）が作る Unix ソケットの置き場
+#   /usr/local/share/dth50/dth50-client.js  … tuners.yml の command で動かすクライアント
+# 公式は /opt と /var/run を自前のボリュームに使っているので、こちらは /dth50 の下に置く。
+services:
+  mirakurun:
+    volumes:
+      - /run/dth50:/dth50/run
+      - /usr/local/share/dth50/dth50-client.js:/dth50/dth50-client.js:ro

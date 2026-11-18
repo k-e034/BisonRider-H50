@@ -1,0 +1,11 @@
+# ベンダのファイル（ファーム・SECODE など）。著作物なので入れない
+vendor/
+*.scd
+*firmware*.bin
+
+# ビルド物・実行時のもの
+__pycache__/
+*.pyc
+*.so
+logs/
+*.ts

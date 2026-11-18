@@ -1,0 +1,24 @@
+# Mirakurun の設定（Docker ならホストの /opt/mirakurun/config/tuners.yml）。
+# B-CAS の復号はカードの中で済んでいるので decoder は書かない。
+#
+# 橋（python3 -m dth50 bridge）は挿さっているカード（実機で確かめた機種）を全部握り、チューナーにカードをまたいだ
+# 通し番号を振る: カードを PCI アドレスの順に並べ、カードごとのチューナーを続けて数える（橋の起動時のログ
+# 「チューナー N = …」に出る）。クライアントの 2 つ目の引数がその番号。
+#   DT-H50/PCIEW 1 枚            → 1・2
+#   DT-H50/PCIEW ＋ DT-H50/PCIE  → 1・2（PCIEW）・3（PCIE）※ PCI アドレスの順
+#   DT-H50/PCIEW 2 枚            → 1・2・3・4
+# 下は PCIEW 1 枚の例。カードを足したら、同じ形で 3・4 を足す。
+# 橋を --spawn で動かすときは 1 本ずつしか通らないので、2 つ目以降を isDisabled: true にする。
+#
+# 2026-11-15〜17 は 2 つ目を止めて 1 本で動かしていた（11-11 に 2 本目でカードが止まったため）。原因を直して戻した
+# （docs/hardware.md の「2 本同時で起きた致命的な失敗と直し方」）。
+- name: DT-H50-1
+  types:
+    - GR
+  command: node /dth50/dth50-client.js <channel> 1
+  isDisabled: false
+- name: DT-H50-2
+  types:
+    - GR
+  command: node /dth50/dth50-client.js <channel> 2
+  isDisabled: false

@@ -5,7 +5,7 @@ vendor_freq_bytes / isdbt_freq と ts_grab の「1. ベンダの初期化列 →
 初期化列はベンダのドライバの I2C を採ったもので、このリポジトリには入れない（vendor/tuner-seq.txt）。
 
 DT-H50/PCIEW の 2 つ目（SMT-MJ110・復調器 0x20・チューナー 0xC0）は TunerMJ110。列はベンダのフィルタの MJ110 の処理を
-動かして取ったもの（tools/extract_mj110.py → vendor/tuner2-mj110.txt）。DT-H50/PCIE は未確認（docs/hardware.md）。
+動かして取ったもの（tools/extract_mj110.py → vendor/tuner2-mj110.txt）。DT-H50/PCIE のチューナーも TunerMJ110 で動く（docs/hardware.md）。
 """
 import logging
 import time
